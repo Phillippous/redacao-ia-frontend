@@ -119,6 +119,61 @@ export default function EnviarPage() {
   const [essayText, setEssayText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isOcrLoading, setIsOcrLoading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const IMAGE_ERROR = "Há um erro na imagem anexada";
+  const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+  async function handleImageUpload(file: File | undefined | null) {
+    if (!file) return;
+
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type) || file.size > MAX_IMAGE_BYTES) {
+      setError(IMAGE_ERROR);
+      return;
+    }
+
+    setError(null);
+    setIsOcrLoading(true);
+
+    try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session) {
+        router.push("/login");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("image", file);
+
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/ocr`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${session.access_token}` },
+        body: formData,
+      });
+
+      if (!res.ok) {
+        setError(IMAGE_ERROR);
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.redacao || typeof data.redacao !== "string") {
+        setError(IMAGE_ERROR);
+        return;
+      }
+
+      setEssayText(data.redacao);
+    } catch {
+      setError(IMAGE_ERROR);
+    } finally {
+      setIsOcrLoading(false);
+    }
+  }
 
   const [isMobile, setIsMobile] = useState(
     typeof window !== "undefined" ? window.innerWidth < 400 : false
@@ -230,6 +285,85 @@ export default function EnviarPage() {
             style={inputStyle}
             onFocus={(e) => (e.currentTarget.style.borderColor = "rgba(45,212,168,0.40)")}
             onBlur={(e) => (e.currentTarget.style.borderColor = C.cardBorder)}
+          />
+        </div>
+
+        {/* Upload de imagem (OCR) */}
+        <div style={{ marginBottom: 20 }}>
+          <label style={labelStyle}>
+            Foto da redação{" "}
+            <span style={{ color: C.textDim, fontSize: 10, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
+              (opcional)
+            </span>
+          </label>
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Arraste uma foto da redação ou clique para selecionar"
+            aria-busy={isOcrLoading}
+            onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+            onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDragging(false);
+              if (isOcrLoading) return;
+              handleImageUpload(e.dataTransfer.files?.[0]);
+            }}
+            onClick={() => { if (!isOcrLoading) fileInputRef.current?.click(); }}
+            onKeyDown={(e) => {
+              if ((e.key === "Enter" || e.key === " ") && !isOcrLoading) {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              minHeight: 104,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              padding: "20px 16px",
+              borderRadius: 12,
+              border: `2px dashed ${isDragging ? C.accent : C.cardBorder}`,
+              background: isDragging ? C.accentDim : C.surface,
+              color: isDragging ? C.accent : C.textMuted,
+              fontSize: 13,
+              fontFamily: "'DM Sans', sans-serif",
+              textAlign: "center",
+              cursor: isOcrLoading ? "not-allowed" : "pointer",
+              transition: "all 0.2s ease",
+            }}
+          >
+            {isOcrLoading ? (
+              <>
+                <svg width="16" height="16" viewBox="0 0 16 16" style={{ animation: "spin 0.8s linear infinite" }} aria-hidden="true">
+                  <circle cx="8" cy="8" r="6" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="2" />
+                  <path d="M8 2 A6 6 0 0 1 14 8" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span>Extraindo texto da imagem...</span>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+              </>
+            ) : (
+              <span>
+                Arraste uma foto da redação ou <span style={{ color: C.accent }}>clique para selecionar</span>
+                <br />
+                <span style={{ fontSize: 11, color: C.textDim }}>JPG, PNG ou WEBP • até 5MB</span>
+              </span>
+            )}
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              handleImageUpload(e.target.files?.[0]);
+              e.target.value = "";
+            }}
           />
         </div>
 
