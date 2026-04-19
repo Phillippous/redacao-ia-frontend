@@ -121,6 +121,7 @@ export default function EnviarPage() {
   const [error, setError] = useState<string | null>(null);
   const [isOcrLoading, setIsOcrLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [attachedFileName, setAttachedFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const IMAGE_ERROR = "Há um erro na imagem anexada";
@@ -133,6 +134,14 @@ export default function EnviarPage() {
     if (!ALLOWED_IMAGE_TYPES.includes(file.type) || file.size > MAX_IMAGE_BYTES) {
       setError(IMAGE_ERROR);
       return;
+    }
+
+    // Se já há texto digitado, confirma antes de sobrescrever
+    if (essayText.trim().length > 0) {
+      const confirmed = window.confirm(
+        "Isso vai substituir o texto atual pelo texto extraído da foto. Deseja continuar?"
+      );
+      if (!confirmed) return;
     }
 
     setError(null);
@@ -168,10 +177,32 @@ export default function EnviarPage() {
       }
 
       setEssayText(data.redacao);
+      setAttachedFileName(file.name);
     } catch {
       setError(IMAGE_ERROR);
     } finally {
       setIsOcrLoading(false);
+    }
+  }
+
+  // Remove apenas o chip (preserva o texto já extraído/editado)
+  function handleRemoveAttachment() {
+    setAttachedFileName(null);
+  }
+
+  // Intercepta paste de imagem no textarea; deixa o paste de texto rolar normal
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          handleImageUpload(file);
+          return;
+        }
+      }
     }
   }
 
@@ -265,7 +296,7 @@ export default function EnviarPage() {
           Nova redação
         </h1>
         <p style={{ fontSize: 13, color: C.textMuted, margin: "0 0 28px" }}>
-          Cole ou digite sua redação abaixo. A correção leva cerca de 30 segundos.
+          Cole, digite ou anexe uma foto da sua redação. A correção leva cerca de 30 segundos.
         </p>
 
         {/* Tema */}
@@ -288,86 +319,7 @@ export default function EnviarPage() {
           />
         </div>
 
-        {/* Upload de imagem (OCR) */}
-        <div style={{ marginBottom: 20 }}>
-          <label style={labelStyle}>
-            Foto da redação{" "}
-            <span style={{ color: C.textDim, fontSize: 10, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
-              (opcional)
-            </span>
-          </label>
-          <div
-            role="button"
-            tabIndex={0}
-            aria-label="Arraste uma foto da redação ou clique para selecionar"
-            aria-busy={isOcrLoading}
-            onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
-            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
-            onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); }}
-            onDrop={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setIsDragging(false);
-              if (isOcrLoading) return;
-              handleImageUpload(e.dataTransfer.files?.[0]);
-            }}
-            onClick={() => { if (!isOcrLoading) fileInputRef.current?.click(); }}
-            onKeyDown={(e) => {
-              if ((e.key === "Enter" || e.key === " ") && !isOcrLoading) {
-                e.preventDefault();
-                fileInputRef.current?.click();
-              }
-            }}
-            style={{
-              width: "100%",
-              boxSizing: "border-box",
-              minHeight: 104,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 10,
-              padding: "20px 16px",
-              borderRadius: 12,
-              border: `2px dashed ${isDragging ? C.accent : C.cardBorder}`,
-              background: isDragging ? C.accentDim : C.surface,
-              color: isDragging ? C.accent : C.textMuted,
-              fontSize: 13,
-              fontFamily: "'DM Sans', sans-serif",
-              textAlign: "center",
-              cursor: isOcrLoading ? "not-allowed" : "pointer",
-              transition: "all 0.2s ease",
-            }}
-          >
-            {isOcrLoading ? (
-              <>
-                <svg width="16" height="16" viewBox="0 0 16 16" style={{ animation: "spin 0.8s linear infinite" }} aria-hidden="true">
-                  <circle cx="8" cy="8" r="6" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="2" />
-                  <path d="M8 2 A6 6 0 0 1 14 8" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                <span>Extraindo texto da imagem...</span>
-                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-              </>
-            ) : (
-              <span>
-                Arraste uma foto da redação ou <span style={{ color: C.accent }}>clique para selecionar</span>
-                <br />
-                <span style={{ fontSize: 11, color: C.textDim }}>JPG, PNG ou WEBP • até 5MB</span>
-              </span>
-            )}
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              handleImageUpload(e.target.files?.[0]);
-              e.target.value = "";
-            }}
-          />
-        </div>
-
-        {/* Redação */}
+        {/* Redação (campo unificado: texto + foto) */}
         <div style={{ marginBottom: 20 }}>
           <label htmlFor="essay-input" style={labelStyle}>
             Sua redação{" "}
@@ -375,23 +327,148 @@ export default function EnviarPage() {
               (obrigatório)
             </span>
           </label>
-          <div style={{ position: "relative" }}>
+
+          {/* Chip de anexo — aparece quando OCR foi bem-sucedido */}
+          {attachedFileName && !isOcrLoading && (
+            <div
+              role="status"
+              style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "10px 14px",
+                background: C.accentDim,
+                border: `1px solid rgba(45,212,168,0.20)`,
+                borderRadius: 10,
+                marginBottom: 8,
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+                <path d="M2 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4Z" stroke={C.accent} strokeWidth="1.5" />
+                <circle cx="6" cy="6" r="1.25" fill={C.accent} />
+                <path d="m2.5 11 3-3 3.5 3.5 2-2 2.5 2.5" stroke={C.accent} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontSize: 13, color: C.text, fontWeight: 500,
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                }}>
+                  Texto extraído de {attachedFileName}
+                </div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                  Revise com atenção — o OCR pode cometer erros.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleRemoveAttachment}
+                aria-label="Remover indicação de foto anexada"
+                style={{
+                  background: "none", border: "none",
+                  color: C.textMuted, fontSize: 16, lineHeight: 1,
+                  cursor: "pointer", padding: 4,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  minWidth: 28, minHeight: 28,
+                  borderRadius: 6,
+                  transition: "color 0.2s ease",
+                  flexShrink: 0,
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = C.text)}
+                onMouseLeave={(e) => (e.currentTarget.style.color = C.textMuted)}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          <div
+            style={{ position: "relative" }}
+            onDragEnter={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              if (!isOcrLoading) setIsDragging(true);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              if (!isOcrLoading) setIsDragging(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              // Só desativa o drag se realmente saiu do wrapper (não só entrou num filho)
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setIsDragging(false);
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              setIsDragging(false);
+              if (isOcrLoading) return;
+              handleImageUpload(e.dataTransfer.files?.[0]);
+            }}
+          >
             <textarea
               id="essay-input"
               ref={textareaRef}
               value={essayText}
               onChange={(e) => setEssayText(e.target.value)}
-              placeholder="Cole ou digite sua redação aqui..."
+              onPaste={handlePaste}
+              disabled={isOcrLoading}
+              placeholder="Cole, digite ou arraste uma foto da sua redação aqui..."
               rows={16}
               style={{
                 ...inputStyle,
                 lineHeight: 1.8,
                 resize: "vertical",
                 paddingBottom: 36,
+                borderColor: isDragging ? C.accent : C.cardBorder,
+                opacity: isOcrLoading ? 0.5 : 1,
               }}
-              onFocus={(e) => (e.currentTarget.style.borderColor = "rgba(45,212,168,0.40)")}
-              onBlur={(e) => (e.currentTarget.style.borderColor = C.cardBorder)}
+              onFocus={(e) => {
+                if (!isDragging) e.currentTarget.style.borderColor = "rgba(45,212,168,0.40)";
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = isDragging ? C.accent : C.cardBorder;
+              }}
             />
+
+            {/* Overlay durante drag */}
+            {isDragging && !isOcrLoading && (
+              <div style={{
+                position: "absolute", inset: 0,
+                background: C.accentDim,
+                border: `2px dashed ${C.accent}`,
+                borderRadius: 12,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                color: C.accent, fontSize: 14, fontWeight: 500,
+                pointerEvents: "none",
+                fontFamily: "'DM Sans', sans-serif",
+              }}>
+                Solte a imagem para extrair o texto
+              </div>
+            )}
+
+            {/* Overlay durante OCR */}
+            {isOcrLoading && (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  position: "absolute", inset: 0,
+                  background: "rgba(15,15,24,0.75)",
+                  borderRadius: 12,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  gap: 10,
+                  color: C.accent, fontSize: 13, fontWeight: 500,
+                  pointerEvents: "none",
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" style={{ animation: "spin 0.8s linear infinite" }} aria-hidden="true">
+                  <circle cx="8" cy="8" r="6" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="2" />
+                  <path d="M8 2 A6 6 0 0 1 14 8" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span>Extraindo texto da imagem...</span>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+              </div>
+            )}
+
             {/* Contadores */}
             <div style={{
               position: "absolute", bottom: 12, right: 16,
@@ -404,6 +481,52 @@ export default function EnviarPage() {
               <span>{charCount} car.</span>
             </div>
           </div>
+
+          {/* Link sutil para anexar foto + dica de formato */}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            marginTop: 8, gap: 12, flexWrap: "wrap",
+          }}>
+            <button
+              type="button"
+              onClick={() => { if (!isOcrLoading) fileInputRef.current?.click(); }}
+              disabled={isOcrLoading}
+              style={{
+                background: "none", border: "none",
+                color: C.textMuted, fontSize: 12,
+                cursor: isOcrLoading ? "not-allowed" : "pointer",
+                fontFamily: "'DM Sans', sans-serif",
+                padding: "4px 0",
+                textAlign: "left",
+                display: "inline-flex", alignItems: "center", gap: 6,
+                transition: "color 0.2s ease",
+              }}
+              onMouseEnter={(e) => { if (!isOcrLoading) e.currentTarget.style.color = C.accent; }}
+              onMouseLeave={(e) => { if (!isOcrLoading) e.currentTarget.style.color = C.textMuted; }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M2 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4Z" stroke="currentColor" strokeWidth="1.5" />
+                <circle cx="6" cy="6" r="1.25" fill="currentColor" />
+                <path d="m2.5 11 3-3 3.5 3.5 2-2 2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              ou anexe uma foto
+            </button>
+            <span style={{ fontSize: 11, color: C.textDim }}>
+              JPG, PNG ou WEBP • até 5MB
+            </span>
+          </div>
+
+          {/* Input file oculto (acionado pelo link, paste ou drop) */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              handleImageUpload(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
         </div>
 
         {/* Erro */}
